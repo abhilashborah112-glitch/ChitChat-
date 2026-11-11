@@ -13,17 +13,20 @@ import {
   Search,
   SendHorizontal,
   Settings,
+  ShieldCheck,
   Smile,
   SquarePen,
   Sun,
   Trash2,
   X,
 } from 'lucide-react';
-import { useLocalStorage } from './useLocalStorage';
+import { useLocalStorage, useSessionStorage } from './useLocalStorage';
+import { useSecureChannel } from './useSecureChannel';
 import Splash from './components/Splash';
 import Avatar from './components/Avatar';
 import ProfileModal from './components/ProfileModal';
 import NewChatModal from './components/NewChatModal';
+import EncryptionPanel from './components/EncryptionPanel';
 import {
   EMOJIS,
   escapeRegExp,
@@ -43,6 +46,10 @@ const MIN = 60 * 1000;
 const HOUR = 60 * MIN;
 const DAY = 24 * HOUR;
 const seedNow = Date.now();
+
+// The encrypted chat between two browser tabs. Its messages live only in this
+// tab's session, never in the shared localStorage.
+const SECURE_ID = 'secure';
 
 const DEFAULT_PROFILE = {
   name: 'You',
@@ -80,6 +87,7 @@ function Highlight({ text, query }) {
 }
 
 function StatusTicks({ status }) {
+  if (status === 'failed') return <X size={15} className="tick" />;
   if (status === 'sent') return <Check size={15} className="tick" />;
   if (status === 'delivered') return <CheckCheck size={15} className="tick" />;
   return <CheckCheck size={15} className="tick tick-read" />;
@@ -93,6 +101,9 @@ export default function App() {
   const [chats, setChats] = useLocalStorage('chitchat_v2_chats', SEED_CHATS);
   const [conversations, setConversations] = useLocalStorage('chitchat_v2_messages', SEED_MESSAGES);
   const [theme, setTheme] = useLocalStorage('chitchat_v2_theme', systemTheme());
+  const [secureMessages, setSecureMessages] = useSessionStorage('chitchat_v2_secure_messages', []);
+  const [secureUnread, setSecureUnread] = useState(0);
+  const [inspectorOpen, setInspectorOpen] = useState(false);
 
   const [activeChatId, setActiveChatId] = useState(() => SEED_CHATS[0]?.id ?? null);
   const [mobileView, setMobileView] = useState('list');
@@ -187,6 +198,18 @@ export default function App() {
     [setConversations],
   );
 
+  // Real end-to-end encrypted chat with another tab (see useSecureChannel.js).
+  const secure = useSecureChannel({
+    name: profile.name,
+    onMessage: (text, msgId) => {
+      setSecureMessages((prev) => [...prev, { id: msgId, sender: 'other', kind: 'text', text, ts: Date.now() }]);
+      if (activeChatRef.current !== SECURE_ID) setSecureUnread((n) => n + 1);
+    },
+    onAck: (msgId) => {
+      setSecureMessages((prev) => prev.map((m) => (m.id === msgId ? { ...m, status: 'delivered' } : m)));
+    },
+  });
+
   // Fake delivery receipts, a typing indicator and an optional auto reply.
   const simulateDelivery = useCallback(
     (chatId, messageId, withReply) => {
@@ -211,11 +234,18 @@ export default function App() {
     [appendMessage, later, setChats, setStatus],
   );
 
+  const secureChat = useMemo(
+    () => ({ id: SECURE_ID, name: secure.peer?.name || 'Secure Chat', phone: 'E2EE', unread: secureUnread, secure: true }),
+    [secure.peer?.name, secureUnread],
+  );
+  const allChats = useMemo(() => [secureChat, ...chats], [secureChat, chats]);
+  const allConversations = useMemo(() => ({ ...conversations, [SECURE_ID]: secureMessages }), [conversations, secureMessages]);
+
   const chatList = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    return chats
+    return allChats
       .map((chat) => {
-        const list = conversations[chat.id] || [];
+        const list = allConversations[chat.id] || [];
         return { ...chat, last: list[list.length - 1] };
       })
       .filter((chat) => {
@@ -227,12 +257,13 @@ export default function App() {
           previewText(chat.last).toLowerCase().includes(q)
         );
       })
-      .sort((a, b) => (b.last?.ts || 0) - (a.last?.ts || 0));
-  }, [chats, conversations, filter, searchQuery]);
+      .sort((a, b) => (b.secure ? 1 : 0) - (a.secure ? 1 : 0) || (b.last?.ts || 0) - (a.last?.ts || 0));
+  }, [allChats, allConversations, filter, searchQuery]);
 
-  const unreadTotal = chats.reduce((sum, c) => sum + (c.unread || 0), 0);
-  const activeChat = chats.find((c) => c.id === activeChatId) || null;
-  const messages = useMemo(() => (activeChat ? conversations[activeChat.id] || [] : []), [activeChat, conversations]);
+  const unreadTotal = allChats.reduce((sum, c) => sum + (c.unread || 0), 0);
+  const activeChat = allChats.find((c) => c.id === activeChatId) || null;
+  const isSecureChat = activeChat?.id === SECURE_ID;
+  const messages = useMemo(() => (activeChat ? allConversations[activeChat.id] || [] : []), [activeChat, allConversations]);
   const visibleMessages = useMemo(() => {
     const q = chatQuery.trim().toLowerCase();
     if (!q) return messages;
@@ -248,6 +279,7 @@ export default function App() {
     setActiveChatId(id);
     setMobileView('chat');
     setChats((prev) => prev.map((c) => (c.id === id ? { ...c, unread: 0 } : c)));
+    if (id === SECURE_ID) setSecureUnread(0);
     setChatSearchOpen(false);
     setChatQuery('');
     setEmojiOpen(false);
@@ -260,9 +292,17 @@ export default function App() {
     event.preventDefault();
     const text = messageInput.trim();
     if (!text || !activeChat) return;
-    const message = { id: Date.now(), sender: 'me', kind: 'text', text, ts: Date.now(), status: 'sent' };
-    appendMessage(activeChat.id, message);
-    simulateDelivery(activeChat.id, message.id, true);
+    const message = { id: newId(), sender: 'me', kind: 'text', text, ts: Date.now(), status: 'sent' };
+    if (activeChat.id === SECURE_ID) {
+      if (!secure.peer) return;
+      setSecureMessages((prev) => [...prev, message]);
+      secure.send(text, message.id).catch(() => {
+        setSecureMessages((prev) => prev.map((m) => (m.id === message.id ? { ...m, status: 'failed' } : m)));
+      });
+    } else {
+      appendMessage(activeChat.id, message);
+      simulateDelivery(activeChat.id, message.id, true);
+    }
     setMessageInput('');
     setEmojiOpen(false);
   };
@@ -270,7 +310,7 @@ export default function App() {
   const handleImagePicked = async (event) => {
     const file = event.target.files?.[0];
     event.target.value = '';
-    if (!file || !activeChat) return;
+    if (!file || !activeChat || activeChat.id === SECURE_ID) return;
     try {
       const thumb = await makeThumbnail(file);
       const message = {
@@ -292,7 +332,7 @@ export default function App() {
   const handleDocPicked = (event) => {
     const file = event.target.files?.[0];
     event.target.value = '';
-    if (!file || !activeChat) return;
+    if (!file || !activeChat || activeChat.id === SECURE_ID) return;
     const message = {
       id: Date.now(),
       sender: 'me',
@@ -328,12 +368,13 @@ export default function App() {
   const handleClearChat = () => {
     if (!activeChat) return;
     if (!window.confirm(`Clear all messages with ${activeChat.name}?`)) return;
-    setConversations((prev) => ({ ...prev, [activeChat.id]: [] }));
+    if (activeChat.id === SECURE_ID) setSecureMessages([]);
+    else setConversations((prev) => ({ ...prev, [activeChat.id]: [] }));
     setMenuOpen(false);
   };
 
   const handleDeleteChat = () => {
-    if (!activeChat) return;
+    if (!activeChat || activeChat.id === SECURE_ID) return;
     if (!window.confirm(`Delete your chat with ${activeChat.name}?`)) return;
     const id = activeChat.id;
     const remaining = chats.filter((c) => c.id !== id);
@@ -398,6 +439,7 @@ export default function App() {
               </p>
             )}
             <span className="bubble-meta">
+              {isSecureChat && <Lock size={11} aria-label="End-to-end encrypted" />}
               {formatClock(msg.ts)}
               {mine && <StatusTicks status={msg.status} />}
             </span>
@@ -490,7 +532,10 @@ export default function App() {
                   <Avatar name={chat.name} size={50} />
                   <span className="chat-body">
                     <span className="chat-row">
-                      <span className="chat-name">{chat.name}</span>
+                      <span className="chat-name">
+                        {chat.name}
+                        {chat.secure && <ShieldCheck size={14} className="lock-mark" aria-label="End-to-end encrypted" />}
+                      </span>
                       <span className={`chat-time ${chat.unread ? 'is-unread' : ''}`}>{formatListTime(chat.last?.ts)}</span>
                     </span>
                     <span className="chat-row">
@@ -500,7 +545,11 @@ export default function App() {
                         ) : (
                           <>
                             {chat.last?.sender === 'me' && <StatusTicks status={chat.last.status} />}
-                            {previewText(chat.last)}
+                            {chat.secure && !chat.last
+                              ? secure.peer
+                                ? 'Encrypted · say hello'
+                                : 'Encrypted · open a 2nd tab'
+                              : previewText(chat.last)}
                           </>
                         )}
                       </span>
@@ -532,11 +581,30 @@ export default function App() {
                 <Avatar name={activeChat.name} size={44} online={!isTyping} />
                 <div className="chat-title">
                   <h2>{activeChat.name}</h2>
-                  <span className={`chat-status ${isTyping ? 'is-typing' : ''}`}>
-                    {isTyping ? 'typing…' : activeChat.phone === 'Group' ? 'Group chat' : `+91 ${activeChat.phone}`}
+                  <span className={`chat-status ${isTyping || (isSecureChat && secure.peer) ? 'is-typing' : ''}`}>
+                    {isSecureChat
+                      ? secure.peer
+                        ? 'End-to-end encrypted'
+                        : 'Waiting for another tab…'
+                      : isTyping
+                        ? 'typing…'
+                        : activeChat.phone === 'Group'
+                          ? 'Group chat'
+                          : `+91 ${activeChat.phone}`}
                   </span>
                 </div>
                 <div className="header-actions" data-popover>
+                  {isSecureChat && (
+                    <button
+                      className={`icon-btn ${inspectorOpen ? 'is-on' : ''}`}
+                      onClick={() => setInspectorOpen((open) => !open)}
+                      aria-label="Show encryption details"
+                      aria-pressed={inspectorOpen}
+                      title="Show encryption details"
+                    >
+                      <ShieldCheck size={19} />
+                    </button>
+                  )}
                   <button className="icon-btn" onClick={toggleChatSearch} aria-label="Search in chat" title="Search in chat">
                     <Search size={19} />
                   </button>
@@ -557,9 +625,11 @@ export default function App() {
                         <button onClick={handleClearChat}>
                           <X size={16} /> Clear chat
                         </button>
-                        <button className="danger" onClick={handleDeleteChat}>
-                          <Trash2 size={16} /> Delete chat
-                        </button>
+                        {!isSecureChat && (
+                          <button className="danger" onClick={handleDeleteChat}>
+                            <Trash2 size={16} /> Delete chat
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>
@@ -583,10 +653,18 @@ export default function App() {
                 </div>
               )}
 
+              {isSecureChat && inspectorOpen && <EncryptionPanel me={secure.me} peer={secure.peer} log={secure.log} />}
+
               <section className="messages" aria-live="polite">
                 <div className="notice">
                   <Lock size={13} />
-                  <span>Demo chat. Messages are stored only on this device.</span>
+                  <span>
+                    {isSecureChat
+                      ? secure.peer
+                        ? 'End-to-end encrypted with ECDH P-256 + AES-GCM. Only the two tabs hold the keys.'
+                        : 'Open ChitChat in a second tab to start an encrypted chat.'
+                      : 'Demo chat. Messages are stored only on this device and are not encrypted.'}
+                  </span>
                 </div>
 
                 {renderMessages()}
@@ -652,6 +730,8 @@ export default function App() {
                       }}
                       aria-label="Attach"
                       aria-expanded={attachOpen}
+                      disabled={isSecureChat}
+                      title={isSecureChat ? 'Attachments are not encrypted in this demo' : 'Attach'}
                     >
                       <Paperclip size={20} />
                     </button>
@@ -686,13 +766,19 @@ export default function App() {
                     ref={messageInputRef}
                     className="composer-input"
                     type="text"
-                    placeholder="Type a message"
+                    placeholder={isSecureChat && !secure.peer ? 'Waiting for the other tab…' : 'Type a message'}
                     value={messageInput}
                     onChange={(e) => setMessageInput(e.target.value)}
+                    disabled={isSecureChat && !secure.peer}
                     aria-label="Message"
                   />
 
-                  <button type="submit" className="send-btn" disabled={!messageInput.trim()} aria-label="Send message">
+                  <button
+                    type="submit"
+                    className="send-btn"
+                    disabled={!messageInput.trim() || (isSecureChat && !secure.peer)}
+                    aria-label="Send message"
+                  >
                     <SendHorizontal size={20} />
                   </button>
                 </form>

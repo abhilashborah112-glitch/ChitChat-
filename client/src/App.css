@@ -1489,3 +1489,153 @@ body {
     width: min(316px, calc(100vw - 40px));
   }
 }
+
+/* ==========================================================
+   End-to-end encryption UI
+   ========================================================== */
+.lock-mark {
+  display: inline-block;
+  margin-left: 6px;
+  vertical-align: -2px;
+  color: var(--accent-3);
+}
+
+.bubble-meta svg:first-child:not(.tick) {
+  opacity: 0.85;
+}
+
+.icon-btn.is-on {
+  background: var(--panel-active);
+  color: var(--accent-3);
+}
+
+.icon-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.composer-input:disabled {
+  cursor: not-allowed;
+}
+
+.enc-panel {
+  max-height: 46%;
+  padding: 14px 20px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  overflow-y: auto;
+  animation: slide-down 0.2s ease;
+}
+
+.enc-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.enc-card {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--input-bg);
+}
+
+.enc-card h4,
+.enc-log-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--accent-3);
+}
+
+.enc-log-title {
+  margin-top: 14px;
+}
+
+.enc-card p,
+.enc-card small,
+.enc-empty {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.enc-card dl {
+  margin: 0 0 6px;
+}
+
+.enc-card dt {
+  margin-top: 4px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.enc-card dd {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  color: var(--text);
+  word-break: break-word;
+}
+
+.enc-log {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.enc-log li {
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--input-bg);
+}
+
+.enc-log-head {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 4px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.enc-dir {
+  font-weight: 700;
+}
+
+.enc-dir.out {
+  color: var(--accent);
+}
+
+.enc-dir.in {
+  color: var(--accent-2);
+}
+
+.enc-log code {
+  display: block;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: var(--text);
+  word-break: break-all;
+}
+
+.enc-log small {
+  display: block;
+  margin-top: 4px;
+  font-size: 11.5px;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+.enc-error {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--danger);
+}

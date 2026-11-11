@@ -1,10 +1,9 @@
 import { useState, useEffect } from 'react';
 
-// Change to export function instead of export default function
-export function useLocalStorage(key, initialValue) {
+function useWebStorage(storageName, key, initialValue) {
   const [storedValue, setStoredValue] = useState(() => {
     try {
-      const item = window.localStorage.getItem(key);
+      const item = window[storageName].getItem(key);
       return item ? JSON.parse(item) : initialValue;
     } catch (error) {
       console.error(error);
@@ -14,11 +13,21 @@ export function useLocalStorage(key, initialValue) {
 
   useEffect(() => {
     try {
-      window.localStorage.setItem(key, JSON.stringify(storedValue));
+      window[storageName].setItem(key, JSON.stringify(storedValue));
     } catch (error) {
       console.error(error);
     }
-  }, [key, storedValue]);
+  }, [storageName, key, storedValue]);
 
   return [storedValue, setStoredValue];
+}
+
+/** Like useState, but remembered across page reloads and shared by all tabs. */
+export function useLocalStorage(key, initialValue) {
+  return useWebStorage('localStorage', key, initialValue);
+}
+
+/** Like useState, but remembered only for this browser tab. */
+export function useSessionStorage(key, initialValue) {
+  return useWebStorage('sessionStorage', key, initialValue);
 }
