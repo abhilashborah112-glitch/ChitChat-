@@ -1,43 +1,59 @@
-
 :root {
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system,
-    BlinkMacSystemFont, "Segoe UI", sans-serif;
-  color: #f7f7ff;
-  background: #0b0d17;
+  font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  color-scheme: dark;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
 }
 
 * {
   box-sizing: border-box;
 }
 
-html {
+html,
+body,
+#root {
   min-width: 320px;
-  min-height: 100%;
-  background: #0b0d17;
+  height: 100%;
+  margin: 0;
 }
 
 body {
-  min-width: 320px;
-  min-height: 100vh;
-  margin: 0;
+  overflow: hidden;
 }
 
 button,
 input {
   font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
 }
 
 button:focus-visible,
 input:focus-visible {
-  outline: 2px solid #a99afa;
-  outline-offset: 3px;
+  outline: 2px solid var(--accent, #8b6cff);
+  outline-offset: 2px;
 }
 
 ::selection {
-  color: white;
-  background: #6556df;
+  color: #fff;
+  background: #7c5cff;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
