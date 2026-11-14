@@ -1,61 +1,21 @@
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { io as connect } from 'socket.io-client';
-import { createRelayServer } from '../src/server.js';
-import { PACKET_EVENT } from '../src/relay.js';
+import { createHarness } from '../testing/helpers.js';
 // The real frontend encryption code, so the test covers the whole path.
-import {
-  decryptText,
-  deriveSharedKey,
-  encryptText,
-  generateIdentity,
-  importPrivateKey,
-} from '../../client/src/crypto.js';
+import { decryptText, deriveSharedKey, encryptText, generateIdentity, importPrivateKey } from '../../client/src/crypto.js';
 
+const harness = createHarness();
+const { client, person } = harness;
 let server;
 let url;
-const sockets = [];
 
 before(async () => {
-  server = createRelayServer({ origins: ['http://localhost:5173'] });
-  await new Promise((resolve) => server.httpServer.listen(0, resolve));
-  url = `http://localhost:${server.httpServer.address().port}`;
+  await harness.start();
+  server = harness.server;
+  url = harness.url;
 });
 
-after(async () => {
-  sockets.forEach((s) => s.close());
-  server.io.close();
-});
-
-/** A connected test client that records every packet it receives. */
-async function client() {
-  const socket = connect(url, { transports: ['websocket'], forceNew: true });
-  sockets.push(socket);
-  const received = [];
-  socket.on(PACKET_EVENT, (packet) => received.push(packet));
-  await new Promise((resolve, reject) => {
-    socket.once('connect', resolve);
-    socket.once('connect_error', reject);
-  });
-  const send = (packet) => socket.timeout(2000).emitWithAck(PACKET_EVENT, packet);
-  const waitFor = async (predicate) => {
-    for (let i = 0; i < 100; i += 1) {
-      const hit = received.find(predicate);
-      if (hit) return hit;
-      await new Promise((r) => setTimeout(r, 20));
-    }
-    throw new Error('Timed out waiting for a packet.');
-  };
-  return { socket, received, send, waitFor };
-}
-
-async function person(name) {
-  const identity = await generateIdentity();
-  const id = `${name}-${Math.random().toString(36).slice(2)}`;
-  const c = await client();
-  const hello = { type: 'hello', from: id, name, publicKey: identity.publicJwk };
-  return { ...c, id, name, identity, hello };
-}
+after(() => harness.stop());
 
 describe('health', () => {
   test('GET /health reports ok', async () => {
@@ -201,12 +161,13 @@ describe('safety checks', () => {
     }
   });
 
-  test('reports when the recipient is offline', async () => {
+  test('rejects a message to someone the server has never heard of', async () => {
     const alice = await person('Alice');
     await alice.send(alice.hello);
     const reply = await alice.send({ type: 'msg', from: alice.id, to: 'nobody', msgId: 3, iv: 'a', ct: 'b' });
     assert.equal(reply.ok, false);
     assert.equal(reply.undelivered, true);
+    assert.match(reply.error, /unknown recipient/i);
   });
 
   test('rate-limits a flood of packets', async () => {
