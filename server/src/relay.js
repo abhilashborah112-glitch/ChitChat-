@@ -10,6 +10,12 @@
 //
 // The server only ever sees public keys and ciphertext. It has no private
 // keys, so it cannot decrypt anything. It routes by the `to` field.
+//
+// OFFLINE INBOX
+// If the recipient is a known user who is currently offline, the encrypted
+// packet is queued and delivered the next time that user says `hello`.
+// Delivery is "at least once": a queued packet is only removed after the
+// client acknowledges it, so the client must dedupe by (from, msgId).
 
 export const PACKET_EVENT = 'packet';
 
@@ -18,6 +24,15 @@ const MAX_NAME_LENGTH = 40;
 const MAX_PACKET_BYTES = 32 * 1024; // generous for a text message + keys
 const MAX_PACKETS_PER_WINDOW = 60;
 const WINDOW_MS = 10_000;
+
+export const DEFAULT_INBOX_OPTIONS = {
+  maxPerUser: 200, // queued packets per recipient
+  maxTotal: 10_000, // queued packets across all recipients
+  ttlMs: 7 * 24 * 60 * 60 * 1000, // drop packets older than 7 days
+  ackTimeoutMs: 5_000, // how long to wait for the client to confirm a delivery
+  sweepMs: 60_000, // how often expired packets are cleaned out
+  maxKnownUsers: 5_000, // how many different ids the server will remember
+};
 
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 const isShortString = (value, max) => typeof value === 'string' && value.length > 0 && value.length <= max;
@@ -76,9 +91,73 @@ function sanitize(packet) {
   }
 }
 
-export function attachRelay(io) {
-  // userId -> { socketId, hello }. In memory only: restart the server and everyone reconnects.
-  const users = new Map();
+const sameKey = (a, b) => a.x === b.x && a.y === b.y;
+
+export function attachRelay(io, options = {}) {
+  const config = { ...DEFAULT_INBOX_OPTIONS, ...options.inbox };
+
+  // Everything below lives in memory only: restart the server and it is all gone.
+  const known = new Map(); // userId -> sanitized hello (kept after they go offline)
+  const online = new Map(); // userId -> socket id
+  const inbox = new Map(); // userId -> [{ packet, storedAt, inFlight }]
+  let queuedTotal = 0;
+
+  // ---- inbox helpers ------------------------------------------------------
+
+  function removeFromInbox(userId, item) {
+    const list = inbox.get(userId);
+    if (!list) return;
+    const index = list.indexOf(item);
+    if (index === -1) return;
+    list.splice(index, 1);
+    queuedTotal -= 1;
+    if (list.length === 0) inbox.delete(userId);
+  }
+
+  function purgeExpired(userId, now = Date.now()) {
+    const list = inbox.get(userId);
+    if (!list) return;
+    for (const item of [...list]) {
+      if (now - item.storedAt > config.ttlMs) removeFromInbox(userId, item);
+    }
+  }
+
+  /** Queues a packet. Returns an error string if it cannot be stored. */
+  function enqueue(userId, packet) {
+    purgeExpired(userId);
+    const list = inbox.get(userId) ?? [];
+    if (list.length >= config.maxPerUser || queuedTotal >= config.maxTotal) {
+      return 'Recipient inbox is full.';
+    }
+    list.push({ packet, storedAt: Date.now(), inFlight: false });
+    inbox.set(userId, list);
+    queuedTotal += 1;
+    return null;
+  }
+
+  /**
+   * Sends everything queued for `userId` to their freshly connected socket, in
+   * order. Each packet is removed only once the client confirms it; if the
+   * confirmation never comes, it stays queued and is retried on the next hello.
+   */
+  function flushInbox(socket, userId) {
+    purgeExpired(userId);
+    for (const item of inbox.get(userId) ?? []) {
+      if (item.inFlight) continue;
+      item.inFlight = true;
+      socket.timeout(config.ackTimeoutMs).emit(PACKET_EVENT, { ...item.packet, queued: true }, (error) => {
+        item.inFlight = false;
+        if (!error) removeFromInbox(userId, item);
+      });
+    }
+  }
+
+  const sweeper = setInterval(() => {
+    for (const userId of [...inbox.keys()]) purgeExpired(userId);
+  }, config.sweepMs);
+  sweeper.unref?.();
+
+  // ---- connections --------------------------------------------------------
 
   io.on('connection', (socket) => {
     let userId = null;
@@ -110,34 +189,60 @@ export function attachRelay(io) {
       const packet = sanitize(raw);
 
       if (packet.type === 'hello') {
-        if (!userId) {
+        const existing = known.get(packet.from);
+        // An id stays bound to the first public key it used, so nobody can take it over with a new key.
+        if (existing && !sameKey(existing.publicKey, packet.publicKey)) {
+          return reply({ ok: false, error: 'This id is already registered with a different key.' });
+        }
+        if (!existing && known.size >= config.maxKnownUsers) {
+          return reply({ ok: false, error: 'Server is full.' });
+        }
+
+        const firstHello = !userId;
+        if (firstHello) {
           userId = packet.from;
-          // Tell the newcomer who is already here.
-          for (const [id, entry] of users) {
-            if (id !== userId) socket.emit(PACKET_EVENT, { ...entry.hello, reply: true });
+          // Tell the newcomer who else exists, marking those who are offline.
+          for (const [id, hello] of known) {
+            if (id === userId) continue;
+            socket.emit(PACKET_EVENT, { ...hello, reply: true, ...(online.has(id) ? {} : { offline: true }) });
           }
         }
-        users.set(userId, { socketId: socket.id, hello: packet });
+        known.set(userId, packet);
+        online.set(userId, socket.id);
         socket.broadcast.emit(PACKET_EVENT, packet);
+        reply({ ok: true });
+        if (firstHello) flushInbox(socket, userId);
+        return undefined;
+      }
+
+      // msg / ack: only to people the server has heard of.
+      if (!known.has(packet.to)) {
+        return reply({ ok: false, error: 'Unknown recipient.', undelivered: true });
+      }
+
+      const stamped = packet.type === 'msg' ? { ...packet, sentAt: Date.now() } : packet;
+      const targetSocketId = online.get(packet.to);
+      if (targetSocketId) {
+        io.to(targetSocketId).emit(PACKET_EVENT, stamped);
         return reply({ ok: true });
       }
 
-      const target = users.get(packet.to);
-      if (!target) {
-        // Receiver is offline. A real inbox for offline messages is a good next feature.
-        return reply({ ok: false, error: 'Recipient is not online.', undelivered: true });
-      }
-      io.to(target.socketId).emit(PACKET_EVENT, packet);
-      return reply({ ok: true });
+      const full = enqueue(packet.to, stamped);
+      if (full) return reply({ ok: false, error: full, undelivered: true });
+      return reply({ ok: true, queued: true });
     });
 
     socket.on('disconnect', () => {
-      if (userId && users.get(userId)?.socketId === socket.id) {
-        users.delete(userId);
+      if (userId && online.get(userId) === socket.id) {
+        online.delete(userId);
         socket.broadcast.emit(PACKET_EVENT, { type: 'bye', from: userId });
       }
     });
   });
 
-  return { onlineCount: () => users.size };
+  return {
+    onlineCount: () => online.size,
+    queuedCount: () => queuedTotal,
+    close: () => clearInterval(sweeper),
+  };
 }
