@@ -20,7 +20,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import { useLocalStorage, useSessionStorage } from './useLocalStorage';
+import { useLocalStorage } from './useLocalStorage';
 import { useSecureChannel } from './useSecureChannel';
 import Splash from './components/Splash';
 import Avatar from './components/Avatar';
@@ -49,7 +49,8 @@ const seedNow = Date.now();
 
 // The encrypted chat between two browser tabs. Its messages live only in this
 // tab's session, never in the shared localStorage.
-const SECURE_ID = 'secure';
+const SECURE_ID = 'secure'; // placeholder chat shown until the server tells us about other people
+const securePeerChatId = (peerId) => `secure:${peerId}`;
 
 const DEFAULT_PROFILE = {
   name: 'You',
@@ -101,8 +102,8 @@ export default function App() {
   const [chats, setChats] = useLocalStorage('chitchat_v2_chats', SEED_CHATS);
   const [conversations, setConversations] = useLocalStorage('chitchat_v2_messages', SEED_MESSAGES);
   const [theme, setTheme] = useLocalStorage('chitchat_v2_theme', systemTheme());
-  const [secureMessages, setSecureMessages] = useSessionStorage('chitchat_v2_secure_messages', []);
-  const [secureUnread, setSecureUnread] = useState(0);
+  const [secureMessages, setSecureMessages] = useLocalStorage('chitchat_v3_secure_messages', {}); // { [peerId]: [messages] }
+  const [secureUnread, setSecureUnread] = useState({}); // { [peerId]: count }
   const [inspectorOpen, setInspectorOpen] = useState(false);
 
   const [activeChatId, setActiveChatId] = useState(() => SEED_CHATS[0]?.id ?? null);
@@ -198,15 +199,22 @@ export default function App() {
     [setConversations],
   );
 
-  // Real end-to-end encrypted chat with another tab (see useSecureChannel.js).
+  const updateSecure = useCallback(
+    (peerId, change) => setSecureMessages((prev) => ({ ...prev, [peerId]: change(prev[peerId] || []) })),
+    [setSecureMessages],
+  );
+
+  // Real end-to-end encrypted chats through the relay server (see useSecureChannel.js).
   const secure = useSecureChannel({
     name: profile.name,
-    onMessage: (text, msgId) => {
-      setSecureMessages((prev) => [...prev, { id: msgId, sender: 'other', kind: 'text', text, ts: Date.now() }]);
-      if (activeChatRef.current !== SECURE_ID) setSecureUnread((n) => n + 1);
+    onMessage: (peerId, text, msgId, meta) => {
+      updateSecure(peerId, (list) => [...list, { id: msgId, sender: 'other', kind: 'text', text, ts: meta?.sentAt || Date.now() }]);
+      if (activeChatRef.current !== securePeerChatId(peerId)) {
+        setSecureUnread((prev) => ({ ...prev, [peerId]: (prev[peerId] || 0) + 1 }));
+      }
     },
-    onAck: (msgId) => {
-      setSecureMessages((prev) => prev.map((m) => (m.id === msgId ? { ...m, status: 'delivered' } : m)));
+    onAck: (peerId, msgId) => {
+      updateSecure(peerId, (list) => list.map((m) => (m.id === msgId ? { ...m, status: 'delivered' } : m)));
     },
   });
 
@@ -234,12 +242,25 @@ export default function App() {
     [appendMessage, later, setChats, setStatus],
   );
 
-  const secureChat = useMemo(
-    () => ({ id: SECURE_ID, name: secure.peer?.name || 'Secure Chat', phone: 'E2EE', unread: secureUnread, secure: true }),
-    [secure.peer?.name, secureUnread],
-  );
-  const allChats = useMemo(() => [secureChat, ...chats], [secureChat, chats]);
-  const allConversations = useMemo(() => ({ ...conversations, [SECURE_ID]: secureMessages }), [conversations, secureMessages]);
+  // One locked chat per person the server knows. Before anyone shows up there is a single placeholder.
+  const secureChats = useMemo(() => {
+    if (secure.peers.length === 0) return [{ id: SECURE_ID, name: 'Secure Chat', phone: 'E2EE', unread: 0, secure: true }];
+    return secure.peers.map((peer) => ({
+      id: securePeerChatId(peer.id),
+      peerId: peer.id,
+      name: peer.name,
+      phone: 'E2EE',
+      unread: secureUnread[peer.id] || 0,
+      secure: true,
+      online: peer.online,
+    }));
+  }, [secure.peers, secureUnread]);
+  const allChats = useMemo(() => [...secureChats, ...chats], [secureChats, chats]);
+  const allConversations = useMemo(() => {
+    const merged = { ...conversations, [SECURE_ID]: [] };
+    for (const chat of secureChats) if (chat.peerId) merged[chat.id] = secureMessages[chat.peerId] || [];
+    return merged;
+  }, [conversations, secureChats, secureMessages]);
 
   const chatList = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -262,7 +283,20 @@ export default function App() {
 
   const unreadTotal = allChats.reduce((sum, c) => sum + (c.unread || 0), 0);
   const activeChat = allChats.find((c) => c.id === activeChatId) || null;
-  const isSecureChat = activeChat?.id === SECURE_ID;
+  const isSecureChat = Boolean(activeChat?.secure);
+  const activePeer = activeChat?.peerId ? secure.peers.find((p) => p.id === activeChat.peerId) || null : null;
+  const secureReady = secure.status === 'online' && Boolean(activePeer);
+  const secureStatusText = !isSecureChat
+    ? ''
+    : secure.status === 'connecting'
+      ? 'Connecting to server…'
+      : secure.status === 'offline'
+        ? 'Server offline'
+        : !activePeer
+          ? 'No contacts yet'
+          : activePeer.online
+            ? 'End-to-end encrypted · online'
+            : 'End-to-end encrypted · offline (delivered when they return)';
   const messages = useMemo(() => (activeChat ? allConversations[activeChat.id] || [] : []), [activeChat, allConversations]);
   const visibleMessages = useMemo(() => {
     const q = chatQuery.trim().toLowerCase();
@@ -279,7 +313,8 @@ export default function App() {
     setActiveChatId(id);
     setMobileView('chat');
     setChats((prev) => prev.map((c) => (c.id === id ? { ...c, unread: 0 } : c)));
-    if (id === SECURE_ID) setSecureUnread(0);
+    const opened = allChats.find((c) => c.id === id);
+    if (opened?.peerId) setSecureUnread((prev) => ({ ...prev, [opened.peerId]: 0 }));
     setChatSearchOpen(false);
     setChatQuery('');
     setEmojiOpen(false);
@@ -293,11 +328,12 @@ export default function App() {
     const text = messageInput.trim();
     if (!text || !activeChat) return;
     const message = { id: newId(), sender: 'me', kind: 'text', text, ts: Date.now(), status: 'sent' };
-    if (activeChat.id === SECURE_ID) {
-      if (!secure.peer) return;
-      setSecureMessages((prev) => [...prev, message]);
-      secure.send(text, message.id).catch(() => {
-        setSecureMessages((prev) => prev.map((m) => (m.id === message.id ? { ...m, status: 'failed' } : m)));
+    if (activeChat.secure) {
+      if (!secureReady) return;
+      const peerId = activeChat.peerId;
+      updateSecure(peerId, (list) => [...list, message]);
+      secure.send(peerId, text, message.id).catch(() => {
+        updateSecure(peerId, (list) => list.map((m) => (m.id === message.id ? { ...m, status: 'failed' } : m)));
       });
     } else {
       appendMessage(activeChat.id, message);
@@ -310,7 +346,7 @@ export default function App() {
   const handleImagePicked = async (event) => {
     const file = event.target.files?.[0];
     event.target.value = '';
-    if (!file || !activeChat || activeChat.id === SECURE_ID) return;
+    if (!file || !activeChat || activeChat.secure) return;
     try {
       const thumb = await makeThumbnail(file);
       const message = {
@@ -332,7 +368,7 @@ export default function App() {
   const handleDocPicked = (event) => {
     const file = event.target.files?.[0];
     event.target.value = '';
-    if (!file || !activeChat || activeChat.id === SECURE_ID) return;
+    if (!file || !activeChat || activeChat.secure) return;
     const message = {
       id: Date.now(),
       sender: 'me',
@@ -368,13 +404,14 @@ export default function App() {
   const handleClearChat = () => {
     if (!activeChat) return;
     if (!window.confirm(`Clear all messages with ${activeChat.name}?`)) return;
-    if (activeChat.id === SECURE_ID) setSecureMessages([]);
-    else setConversations((prev) => ({ ...prev, [activeChat.id]: [] }));
+    if (activeChat.secure) {
+      if (activeChat.peerId) updateSecure(activeChat.peerId, () => []);
+    } else setConversations((prev) => ({ ...prev, [activeChat.id]: [] }));
     setMenuOpen(false);
   };
 
   const handleDeleteChat = () => {
-    if (!activeChat || activeChat.id === SECURE_ID) return;
+    if (!activeChat || activeChat.secure) return;
     if (!window.confirm(`Delete your chat with ${activeChat.name}?`)) return;
     const id = activeChat.id;
     const remaining = chats.filter((c) => c.id !== id);
@@ -546,9 +583,13 @@ export default function App() {
                           <>
                             {chat.last?.sender === 'me' && <StatusTicks status={chat.last.status} />}
                             {chat.secure && !chat.last
-                              ? secure.peer
-                                ? 'Encrypted · say hello'
-                                : 'Encrypted · open a 2nd tab'
+                              ? chat.peerId
+                                ? chat.online
+                                  ? 'Encrypted · online'
+                                  : 'Encrypted · say hello'
+                                : secure.status === 'offline'
+                                  ? 'Start the server to chat'
+                                  : 'Encrypted · waiting for contacts'
                               : previewText(chat.last)}
                           </>
                         )}
@@ -581,11 +622,9 @@ export default function App() {
                 <Avatar name={activeChat.name} size={44} online={!isTyping} />
                 <div className="chat-title">
                   <h2>{activeChat.name}</h2>
-                  <span className={`chat-status ${isTyping || (isSecureChat && secure.peer) ? 'is-typing' : ''}`}>
+                  <span className={`chat-status ${isTyping || (isSecureChat && activePeer?.online) ? 'is-typing' : ''}`}>
                     {isSecureChat
-                      ? secure.peer
-                        ? 'End-to-end encrypted'
-                        : 'Waiting for another tab…'
+                      ? secureStatusText
                       : isTyping
                         ? 'typing…'
                         : activeChat.phone === 'Group'
@@ -653,16 +692,16 @@ export default function App() {
                 </div>
               )}
 
-              {isSecureChat && inspectorOpen && <EncryptionPanel me={secure.me} peer={secure.peer} log={secure.log} />}
+              {isSecureChat && inspectorOpen && <EncryptionPanel me={secure.me} peer={activePeer} log={secure.log} status={secure.status} problem={secure.problem} />}
 
               <section className="messages" aria-live="polite">
                 <div className="notice">
                   <Lock size={13} />
                   <span>
                     {isSecureChat
-                      ? secure.peer
-                        ? 'End-to-end encrypted with ECDH P-256 + AES-GCM. Only the two tabs hold the keys.'
-                        : 'Open ChitChat in a second tab to start an encrypted chat.'
+                      ? activePeer
+                        ? 'End-to-end encrypted with ECDH P-256 + AES-GCM. Only you and your contact hold the keys; the server only sees ciphertext.'
+                        : 'Encrypted chats appear here when the server knows other people. Open ChitChat in another browser (or a private window).'
                       : 'Demo chat. Messages are stored only on this device and are not encrypted.'}
                   </span>
                 </div>
@@ -766,17 +805,17 @@ export default function App() {
                     ref={messageInputRef}
                     className="composer-input"
                     type="text"
-                    placeholder={isSecureChat && !secure.peer ? 'Waiting for the other tab…' : 'Type a message'}
+                    placeholder={isSecureChat && !secureReady ? secureStatusText || 'Waiting…' : 'Type a message'}
                     value={messageInput}
                     onChange={(e) => setMessageInput(e.target.value)}
-                    disabled={isSecureChat && !secure.peer}
+                    disabled={isSecureChat && !secureReady}
                     aria-label="Message"
                   />
 
                   <button
                     type="submit"
                     className="send-btn"
-                    disabled={!messageInput.trim() || (isSecureChat && !secure.peer)}
+                    disabled={!messageInput.trim() || (isSecureChat && !secureReady)}
                     aria-label="Send message"
                   >
                     <SendHorizontal size={20} />

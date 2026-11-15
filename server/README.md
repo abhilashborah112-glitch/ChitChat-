@@ -66,6 +66,19 @@ fails, the sender gets `undelivered: true` instead of a false "queued".
 
 Private keys and message text never reach the database.
 
+## Using it from the frontend
+
+Start the server (`npm run dev` in `server/`) and the client (`npm run dev` in
+`client/`). The client finds the server at port 3001 on the same host as the
+page. To point it elsewhere, set `VITE_SERVER_URL` when starting the client, or
+save an address in the browser: `localStorage.setItem('chitchat_v2_server_url', 'http://host:3001')`.
+The server only accepts pages listed in `CLIENT_ORIGIN`.
+
+Every person the server knows appears as a locked chat. The browser keeps its
+identity in `localStorage`, so closing the browser and coming back keeps the same
+id and key. To try two people on one computer use two different browsers, or a
+private window.
+
 ## The packet format (the contract with the frontend)
 
 One Socket.IO event, `packet`. The packet shapes are **identical** to what
