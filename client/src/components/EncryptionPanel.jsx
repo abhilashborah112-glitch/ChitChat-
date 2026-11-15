@@ -2,7 +2,9 @@ import { KeyRound, ShieldCheck } from 'lucide-react';
 import { formatClock } from '../utils';
 
 /** Shows the keys and the raw encrypted data so the encryption can be demonstrated. */
-export default function EncryptionPanel({ me, peer, log }) {
+const STATUS_TEXT = { connecting: 'Connecting to the server…', online: 'Connected to the server', offline: 'Server not reachable' };
+
+export default function EncryptionPanel({ me, peer, log, status, problem }) {
   return (
     <section className="enc-panel" aria-label="Encryption details">
       <div className="enc-grid">
@@ -12,7 +14,7 @@ export default function EncryptionPanel({ me, peer, log }) {
           </h4>
           <p>
             Key exchange <b>ECDH P-256</b> → shared secret → message cipher <b>AES-256-GCM</b>, using the browser's
-            Web Crypto API. Private keys stay in this tab. Only public keys and ciphertext travel between tabs.
+            Web Crypto API. Private keys never leave this browser. Only public keys and ciphertext travel through the server, which cannot read your chats.
           </p>
         </div>
 
@@ -24,13 +26,17 @@ export default function EncryptionPanel({ me, peer, log }) {
             <dt>Your key</dt>
             <dd>{me?.fingerprint || '…'}</dd>
             <dt>{peer ? `${peer.name}'s key` : 'Their key'}</dt>
-            <dd>{peer?.fingerprint || 'waiting for the other tab'}</dd>
+            <dd>{peer?.fingerprint || 'pick a contact'}</dd>
           </dl>
-          <small>Both tabs should show the same two fingerprints. If they match, nobody swapped the keys.</small>
+          <small>You and your contact should see the same two fingerprints. If they match, nobody swapped the keys.</small>
+          <small className="enc-status">
+            {STATUS_TEXT[status] || ''}
+            {problem ? ` · ${problem}` : ''}
+          </small>
         </div>
       </div>
 
-      <h4 className="enc-log-title">What went over the channel</h4>
+      <h4 className="enc-log-title">What went through the server</h4>
       {log.length === 0 ? (
         <p className="enc-empty">Send a message to see its encrypted form here.</p>
       ) : (
