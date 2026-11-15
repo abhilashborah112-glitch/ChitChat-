@@ -7,7 +7,7 @@ import { generateIdentity } from '../../client/src/crypto.js';
 
 /**
  * Starts a real relay on a random port and gives you connected test clients.
- * Pass `{ inbox: {...} }` to use small limits in a test.
+ * Pass `{ inbox: {...} }` to use small limits in a test, and `{ store }` to test persistence.
  */
 export function createHarness(options = {}) {
   const sockets = [];
@@ -17,6 +17,7 @@ export function createHarness(options = {}) {
 
     async start() {
       harness.server = createRelayServer({ origins: ['http://localhost:5173'], ...options });
+      await harness.server.relay.restore(); // loads saved users/messages when a `store` is given
       await new Promise((resolve) => harness.server.httpServer.listen(0, resolve));
       harness.url = `http://localhost:${harness.server.httpServer.address().port}`;
     },

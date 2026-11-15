@@ -17,6 +17,8 @@
 // Delivery is "at least once": a queued packet is only removed after the
 // client acknowledges it, so the client must dedupe by (from, msgId).
 
+import { randomUUID } from 'node:crypto';
+
 export const PACKET_EVENT = 'packet';
 
 const MAX_ID_LENGTH = 64;
@@ -95,12 +97,45 @@ const sameKey = (a, b) => a.x === b.x && a.y === b.y;
 
 export function attachRelay(io, options = {}) {
   const config = { ...DEFAULT_INBOX_OPTIONS, ...options.inbox };
+  // Optional storage (see store.js). Without one, everything lives in memory only.
+  const store = options.store ?? null;
 
-  // Everything below lives in memory only: restart the server and it is all gone.
+  // Working copies, kept in memory for speed. Every change is also written to
+  // the store (if there is one) and loaded back by restore() after a restart.
   const known = new Map(); // userId -> sanitized hello (kept after they go offline)
   const online = new Map(); // userId -> socket id
-  const inbox = new Map(); // userId -> [{ packet, storedAt, inFlight }]
+  const inbox = new Map(); // userId -> [{ id, packet, storedAt, inFlight }]
   let queuedTotal = 0;
+
+  /** Runs a store write in the background; a failure is logged, never crashes the server. */
+  const background = (work, what) => {
+    if (!store) return;
+    Promise.resolve()
+      .then(work)
+      .catch((error) => console.error(`Storage problem (${what}):`, error?.message ?? error));
+  };
+
+  /** Loads users and queued packets from the store. Call once before accepting connections. */
+  async function restore() {
+    if (!store) return { users: 0, queued: 0 };
+    for (const hello of await store.loadUsers()) {
+      if (known.size < config.maxKnownUsers) known.set(hello.from, hello);
+    }
+    const now = Date.now();
+    let queued = 0;
+    for (const item of await store.loadInbox()) {
+      if (now - item.storedAt > config.ttlMs) {
+        background(() => store.removeInboxItem(item.id), 'remove expired');
+        continue;
+      }
+      const list = inbox.get(item.userId) ?? [];
+      list.push({ id: item.id, packet: item.packet, storedAt: item.storedAt, inFlight: false });
+      inbox.set(item.userId, list);
+      queued += 1;
+    }
+    queuedTotal += queued;
+    return { users: known.size, queued };
+  }
 
   // ---- inbox helpers ------------------------------------------------------
 
@@ -111,6 +146,7 @@ export function attachRelay(io, options = {}) {
     if (index === -1) return;
     list.splice(index, 1);
     queuedTotal -= 1;
+    if (store) background(() => store.removeInboxItem(item.id), 'remove from inbox');
     if (list.length === 0) inbox.delete(userId);
   }
 
@@ -122,16 +158,37 @@ export function attachRelay(io, options = {}) {
     }
   }
 
-  /** Queues a packet. Returns an error string if it cannot be stored. */
-  function enqueue(userId, packet) {
+  /**
+   * Queues a packet. Resolves to an error string if it cannot be stored, else null.
+   * With a store, we wait until the packet is safely saved before saying "queued",
+   * so the sender is never told "queued" about a message that a crash could lose.
+   */
+  async function enqueue(userId, packet) {
     purgeExpired(userId);
     const list = inbox.get(userId) ?? [];
     if (list.length >= config.maxPerUser || queuedTotal >= config.maxTotal) {
       return 'Recipient inbox is full.';
     }
-    list.push({ packet, storedAt: Date.now(), inFlight: false });
+    const item = { id: randomUUID(), packet, storedAt: Date.now(), inFlight: false };
+    // Reserve the spot straight away (before waiting) so parallel messages respect the limits.
+    list.push(item);
     inbox.set(userId, list);
     queuedTotal += 1;
+    if (store) {
+      try {
+        await store.addInboxItem({ id: item.id, userId, packet, storedAt: item.storedAt });
+      } catch (error) {
+        console.error('Storage problem (queue message):', error?.message ?? error);
+        const current = inbox.get(userId);
+        const index = current ? current.indexOf(item) : -1;
+        if (index !== -1) {
+          current.splice(index, 1);
+          queuedTotal -= 1;
+          if (current.length === 0) inbox.delete(userId);
+        }
+        return 'Could not store the message, please try again.';
+      }
+    }
     return null;
   }
 
@@ -207,6 +264,9 @@ export function attachRelay(io, options = {}) {
             socket.emit(PACKET_EVENT, { ...hello, reply: true, ...(online.has(id) ? {} : { offline: true }) });
           }
         }
+        // Remember the user. Saved in the background: it is public data and is
+        // announced again on every reconnect, so a missed save heals itself.
+        if (!existing || existing.name !== packet.name) background(() => store.saveUser(packet), 'save user');
         known.set(userId, packet);
         online.set(userId, socket.id);
         socket.broadcast.emit(PACKET_EVENT, packet);
@@ -227,9 +287,11 @@ export function attachRelay(io, options = {}) {
         return reply({ ok: true });
       }
 
-      const full = enqueue(packet.to, stamped);
-      if (full) return reply({ ok: false, error: full, undelivered: true });
-      return reply({ ok: true, queued: true });
+      enqueue(packet.to, stamped).then((full) => {
+        if (full) return reply({ ok: false, error: full, undelivered: true });
+        return reply({ ok: true, queued: true });
+      });
+      return undefined;
     });
 
     socket.on('disconnect', () => {
@@ -243,6 +305,7 @@ export function attachRelay(io, options = {}) {
   return {
     onlineCount: () => online.size,
     queuedCount: () => queuedTotal,
+    restore,
     close: () => clearInterval(sweeper),
   };
 }

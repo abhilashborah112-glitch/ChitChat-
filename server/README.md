@@ -32,9 +32,39 @@ comma-separated list.
 npm test
 ```
 
-The 21 tests start the server, connect real Socket.IO clients, and use the
+The tests start the server, connect real Socket.IO clients, and use the
 frontend's own `client/src/crypto.js` to encrypt and decrypt, so they cover the
 whole path.
+
+Tests need no database. To also run the persistence checks against your real
+MongoDB (it uses its own `chitchat_test` database, never your real data):
+
+```bash
+# Windows PowerShell
+$env:MONGODB_TEST_URI="mongodb+srv://..."; npm test
+```
+
+## MongoDB storage
+
+With `MONGODB_URI` set in `server/.env`, the server saves **public keys** and
+**queued ciphertext** to MongoDB, so a restart loses nothing. Without it, the
+server runs in memory only, exactly as before.
+
+On startup it connects, checks the connection, and prints either
+`✔ Connected to MongoDB` or a plain-words reason it failed (and then does not
+start). The password is never printed.
+
+| Collection | Holds                                             |
+| ---------- | ------------------------------------------------- |
+| `users`    | id, display name, **public** key                  |
+| `inbox`    | queued encrypted packets; expire after `INBOX_TTL_HOURS` (TTL index) |
+
+How it works: the relay keeps working copies in memory and writes every change
+to the database. On startup `relay.restore()` loads them back. A message is
+reported as `queued` only after the database confirmed it; if the database
+fails, the sender gets `undelivered: true` instead of a false "queued".
+
+Private keys and message text never reach the database.
 
 ## The packet format (the contract with the frontend)
 
@@ -112,8 +142,8 @@ instead of the message silently disappearing.
 
 ### Known limits (good next tasks)
 
-- **In memory only.** Restarting the server clears users and inboxes. MongoDB
-  would fix that.
+- **One server instance only.** The working copy is in memory, so running two
+  copies of the server against one database would not share who is online.
 - **Ids are not authenticated.** The id and public key are visible to everyone,
   so someone could announce the same id with the same public key, receive that
   user's queued ciphertext (they still cannot decrypt it) and confirm it, which
@@ -133,13 +163,17 @@ instead of the message silently disappearing.
 | `src/index.js`        | Reads `PORT` / `CLIENT_ORIGIN` and starts it   |
 | `src/server.js`       | Builds the Express + Socket.IO server          |
 | `src/relay.js`        | The relay logic, packet validation, offline inbox |
+| `src/store.js`        | The storage contract + an in-memory store (tests) |
+| `src/mongoStore.js`   | MongoDB storage and the startup connection check |
 | `test/relay.test.js`  | Tests: presence, messaging, safety checks      |
 | `test/inbox.test.js`  | Tests: the offline inbox                       |
+| `test/persistence.test.js` | Tests: data survives a restart (memory store) |
+| `test/mongo.test.js`  | Tests: MongoDB helpers; real MongoDB if `MONGODB_TEST_URI` is set |
 | `testing/helpers.js`  | Shared test helpers (starts a real server)     |
+| `testing/persistenceSuite.js` | The restart checks, shared by both stores |
 
 ## Ideas for next steps
 
-- **Persistence:** store public keys / queued ciphertext in MongoDB.
 - **Real accounts:** sign-in, so a `from` id belongs to a real person. Right
   now the id is just whatever the client announces.
 - **Several chats at once:** the frontend currently pairs with one peer; it
