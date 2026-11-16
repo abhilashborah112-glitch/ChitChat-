@@ -27,6 +27,7 @@ import Avatar from './components/Avatar';
 import ProfileModal from './components/ProfileModal';
 import NewChatModal from './components/NewChatModal';
 import EncryptionPanel from './components/EncryptionPanel';
+import SecurityModal from './components/SecurityModal';
 import {
   EMOJIS,
   escapeRegExp,
@@ -50,6 +51,8 @@ const seedNow = Date.now();
 // The encrypted chat between two browser tabs. Its messages live only in this
 // tab's session, never in the shared localStorage.
 const SECURE_ID = 'secure'; // placeholder chat shown until the server tells us about other people
+// Developer view of the encryption (keys + ciphertext). Off for normal users; open the app with ?dev=1 to show it.
+const DEV_MODE = new URLSearchParams(window.location.search).has('dev');
 const securePeerChatId = (peerId) => `secure:${peerId}`;
 
 const DEFAULT_PROFILE = {
@@ -105,6 +108,7 @@ export default function App() {
   const [secureMessages, setSecureMessages] = useLocalStorage('chitchat_v3_secure_messages', {}); // { [peerId]: [messages] }
   const [secureUnread, setSecureUnread] = useState({}); // { [peerId]: count }
   const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [securityOpen, setSecurityOpen] = useState(false);
 
   const [activeChatId, setActiveChatId] = useState(() => SEED_CHATS[0]?.id ?? null);
   const [mobileView, setMobileView] = useState('list');
@@ -588,7 +592,7 @@ export default function App() {
                                   ? 'Encrypted · online'
                                   : 'Encrypted · say hello'
                                 : secure.status === 'offline'
-                                  ? 'Start the server to chat'
+                                  ? 'Reconnecting…'
                                   : 'Encrypted · waiting for contacts'
                               : previewText(chat.last)}
                           </>
@@ -633,7 +637,7 @@ export default function App() {
                   </span>
                 </div>
                 <div className="header-actions" data-popover>
-                  {isSecureChat && (
+                  {isSecureChat && DEV_MODE && (
                     <button
                       className={`icon-btn ${inspectorOpen ? 'is-on' : ''}`}
                       onClick={() => setInspectorOpen((open) => !open)}
@@ -661,6 +665,16 @@ export default function App() {
                         <button onClick={toggleChatSearch}>
                           <Search size={16} /> Search messages
                         </button>
+                        {isSecureChat && activePeer && (
+                          <button
+                            onClick={() => {
+                              setMenuOpen(false);
+                              setSecurityOpen(true);
+                            }}
+                          >
+                            <ShieldCheck size={16} /> Verify security code
+                          </button>
+                        )}
                         <button onClick={handleClearChat}>
                           <X size={16} /> Clear chat
                         </button>
@@ -692,7 +706,7 @@ export default function App() {
                 </div>
               )}
 
-              {isSecureChat && inspectorOpen && <EncryptionPanel me={secure.me} peer={activePeer} log={secure.log} status={secure.status} problem={secure.problem} />}
+              {isSecureChat && DEV_MODE && inspectorOpen && <EncryptionPanel me={secure.me} peer={activePeer} log={secure.log} status={secure.status} problem={secure.problem} />}
 
               <section className="messages" aria-live="polite">
                 <div className="notice">
@@ -700,8 +714,8 @@ export default function App() {
                   <span>
                     {isSecureChat
                       ? activePeer
-                        ? 'End-to-end encrypted with ECDH P-256 + AES-GCM. Only you and your contact hold the keys; the server only sees ciphertext.'
-                        : 'Encrypted chats appear here when the server knows other people. Open ChitChat in another browser (or a private window).'
+                        ? `Messages in this chat are end-to-end encrypted. Only you and ${activePeer.name} can read them.`
+                        : 'Your encrypted chats appear here as soon as other people join ChitChat.'
                       : 'Demo chat. Messages are stored only on this device and are not encrypted.'}
                   </span>
                 </div>
@@ -840,6 +854,7 @@ export default function App() {
         </main>
       </div>
 
+      {securityOpen && activePeer && <SecurityModal me={secure.me} peer={activePeer} onClose={() => setSecurityOpen(false)} />}
       {newChatOpen && <NewChatModal onCreate={handleCreateChat} onClose={() => setNewChatOpen(false)} />}
       {profileOpen && (
         <ProfileModal profile={profile} onSave={setProfile} onClose={() => setProfileOpen(false)} />

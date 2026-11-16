@@ -1639,3 +1639,42 @@ body {
   font-size: 12.5px;
   color: var(--danger);
 }
+
+/* Verify security code dialog */
+.modal-head h3 {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.security-lead,
+.security-help {
+  margin: 0 0 14px;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  color: var(--text-muted, inherit);
+}
+.security-lead svg {
+  vertical-align: -2px;
+  margin-right: 4px;
+}
+.security-codes {
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: var(--surface-2, rgba(127, 127, 127, 0.12));
+}
+.security-codes dt {
+  font-size: 0.78rem;
+  opacity: 0.7;
+  margin-top: 8px;
+}
+.security-codes dt:first-child {
+  margin-top: 0;
+}
+.security-codes dd {
+  margin: 2px 0 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.95rem;
+  letter-spacing: 0.04em;
+  word-break: break-all;
+}
