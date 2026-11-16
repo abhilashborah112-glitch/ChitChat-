@@ -4,18 +4,18 @@ import Avatar from './Avatar';
 import { resizeImage } from '../utils';
 
 /** Edit your own name, about line and profile photo. Contacts can't be edited here. */
-export default function ProfileModal({ profile, onSave, onClose }) {
-  const [draft, setDraft] = useState(profile);
+export default function ProfileModal({ profile, onSave, onClose, firstTime = false }) {
+  const [draft, setDraft] = useState(() => (firstTime ? { ...profile, name: '' } : profile));
   const [error, setError] = useState('');
   const fileRef = useRef(null);
 
   useEffect(() => {
     const onKey = (event) => {
-      if (event.key === 'Escape') onClose();
+      if (event.key === 'Escape' && !firstTime) onClose();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  }, [onClose, firstTime]);
 
   const handlePhoto = async (event) => {
     const file = event.target.files?.[0];
@@ -41,18 +41,24 @@ export default function ProfileModal({ profile, onSave, onClose }) {
       setError('Your name cannot be empty.');
       return;
     }
+    if (name.toLowerCase() === 'you') {
+      setError('Please choose a name other than "You", so your contacts know who you are.');
+      return;
+    }
     onSave({ ...draft, name, about: draft.about.trim() });
     onClose();
   };
 
   return (
-    <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <form className="modal-card" onSubmit={handleSave} role="dialog" aria-modal="true" aria-label="Edit profile">
+    <div className="modal-backdrop" onMouseDown={(e) => !firstTime && e.target === e.currentTarget && onClose()}>
+      <form className="modal-card" onSubmit={handleSave} role="dialog" aria-modal="true" aria-label={firstTime ? 'Welcome to ChitChat' : 'Edit profile'}>
         <div className="modal-head">
-          <h3>Edit profile</h3>
-          <button type="button" className="icon-btn" onClick={onClose} aria-label="Close">
-            <X size={18} />
-          </button>
+          <h3>{firstTime ? 'Welcome to ChitChat' : 'Edit profile'}</h3>
+          {!firstTime && (
+            <button type="button" className="icon-btn" onClick={onClose} aria-label="Close">
+              <X size={18} />
+            </button>
+          )}
         </div>
 
         <div className="profile-photo-block">
@@ -62,7 +68,7 @@ export default function ProfileModal({ profile, onSave, onClose }) {
             onClick={() => fileRef.current?.click()}
             aria-label="Change profile photo"
           >
-            <Avatar name={draft.name || 'You'} image={draft.avatarImage} size={116} />
+            <Avatar name={draft.name || 'Me'} image={draft.avatarImage} size={116} />
             <span className="profile-photo-overlay">
               <Camera size={22} />
               <span>Change</span>
@@ -86,6 +92,8 @@ export default function ProfileModal({ profile, onSave, onClose }) {
             type="text"
             value={draft.name}
             maxLength={40}
+            autoFocus={firstTime}
+            placeholder={firstTime ? 'Enter your name' : ''}
             onChange={(e) => setDraft((prev) => ({ ...prev, name: e.target.value }))}
           />
         </label>
@@ -103,11 +111,13 @@ export default function ProfileModal({ profile, onSave, onClose }) {
         {error && <p className="form-error">{error}</p>}
 
         <div className="modal-actions">
-          <button type="button" className="btn ghost" onClick={onClose}>
-            Cancel
-          </button>
+          {!firstTime && (
+            <button type="button" className="btn ghost" onClick={onClose}>
+              Cancel
+            </button>
+          )}
           <button type="submit" className="btn primary">
-            Save
+            {firstTime ? 'Continue' : 'Save'}
           </button>
         </div>
       </form>

@@ -12,8 +12,8 @@ import {
   Paperclip,
   Search,
   SendHorizontal,
-  Settings,
   ShieldCheck,
+  UserPen,
   Smile,
   SquarePen,
   Sun,
@@ -27,6 +27,7 @@ import Avatar from './components/Avatar';
 import ProfileModal from './components/ProfileModal';
 import NewChatModal from './components/NewChatModal';
 import EncryptionPanel from './components/EncryptionPanel';
+import SecurityModal from './components/SecurityModal';
 import {
   EMOJIS,
   escapeRegExp,
@@ -50,10 +51,14 @@ const seedNow = Date.now();
 // The encrypted chat between two browser tabs. Its messages live only in this
 // tab's session, never in the shared localStorage.
 const SECURE_ID = 'secure'; // placeholder chat shown until the server tells us about other people
+// Developer view of the encryption (keys + ciphertext). Off for normal users; open the app with ?dev=1 to show it.
+const DEV_MODE = new URLSearchParams(window.location.search).has('dev');
+const isUnnamed = (profile) => !profile.name?.trim() || profile.name.trim() === 'You';
 const securePeerChatId = (peerId) => `secure:${peerId}`;
 
+// No name yet: the first-time welcome screen asks for one (an old saved "You" counts as no name).
 const DEFAULT_PROFILE = {
-  name: 'You',
+  name: '',
   about: "Hey there! I'm using ChitChat",
   avatarImage: null,
 };
@@ -105,6 +110,7 @@ export default function App() {
   const [secureMessages, setSecureMessages] = useLocalStorage('chitchat_v3_secure_messages', {}); // { [peerId]: [messages] }
   const [secureUnread, setSecureUnread] = useState({}); // { [peerId]: count }
   const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [securityOpen, setSecurityOpen] = useState(false);
 
   const [activeChatId, setActiveChatId] = useState(() => SEED_CHATS[0]?.id ?? null);
   const [mobileView, setMobileView] = useState('list');
@@ -120,6 +126,7 @@ export default function App() {
   const [chatQuery, setChatQuery] = useState('');
   const [newChatOpen, setNewChatOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
+  const unnamed = isUnnamed(profile);
 
   const activeChatRef = useRef(activeChatId);
   const timers = useRef([]);
@@ -206,7 +213,7 @@ export default function App() {
 
   // Real end-to-end encrypted chats through the relay server (see useSecureChannel.js).
   const secure = useSecureChannel({
-    name: profile.name,
+    name: unnamed ? '' : profile.name.trim(), // nobody is announced to others until they have a name
     onMessage: (peerId, text, msgId, meta) => {
       updateSecure(peerId, (list) => [...list, { id: msgId, sender: 'other', kind: 'text', text, ts: meta?.sentAt || Date.now() }]);
       if (activeChatRef.current !== securePeerChatId(peerId)) {
@@ -501,7 +508,7 @@ export default function App() {
         <aside className="sidebar">
           <header className="sidebar-header">
             <button className="me-btn" onClick={() => setProfileOpen(true)} aria-label="Edit your profile">
-              <Avatar name={profile.name} image={profile.avatarImage} size={44} online />
+              <Avatar name={profile.name || 'Me'} image={profile.avatarImage} size={44} online />
             </button>
             <div className="brand">
               <span className="brand-name">
@@ -521,8 +528,8 @@ export default function App() {
               <button className="icon-btn" onClick={() => setNewChatOpen(true)} aria-label="New chat" title="New chat">
                 <SquarePen size={19} />
               </button>
-              <button className="icon-btn" onClick={() => setProfileOpen(true)} aria-label="Profile settings" title="Profile">
-                <Settings size={19} />
+              <button className="icon-btn" onClick={() => setProfileOpen(true)} aria-label="Edit profile" title="Edit profile">
+                <UserPen size={19} />
               </button>
             </div>
           </header>
@@ -588,7 +595,7 @@ export default function App() {
                                   ? 'Encrypted · online'
                                   : 'Encrypted · say hello'
                                 : secure.status === 'offline'
-                                  ? 'Start the server to chat'
+                                  ? 'Reconnecting…'
                                   : 'Encrypted · waiting for contacts'
                               : previewText(chat.last)}
                           </>
@@ -633,7 +640,7 @@ export default function App() {
                   </span>
                 </div>
                 <div className="header-actions" data-popover>
-                  {isSecureChat && (
+                  {isSecureChat && DEV_MODE && (
                     <button
                       className={`icon-btn ${inspectorOpen ? 'is-on' : ''}`}
                       onClick={() => setInspectorOpen((open) => !open)}
@@ -661,6 +668,16 @@ export default function App() {
                         <button onClick={toggleChatSearch}>
                           <Search size={16} /> Search messages
                         </button>
+                        {isSecureChat && activePeer && (
+                          <button
+                            onClick={() => {
+                              setMenuOpen(false);
+                              setSecurityOpen(true);
+                            }}
+                          >
+                            <ShieldCheck size={16} /> Verify security code
+                          </button>
+                        )}
                         <button onClick={handleClearChat}>
                           <X size={16} /> Clear chat
                         </button>
@@ -692,19 +709,15 @@ export default function App() {
                 </div>
               )}
 
-              {isSecureChat && inspectorOpen && <EncryptionPanel me={secure.me} peer={activePeer} log={secure.log} status={secure.status} problem={secure.problem} />}
+              {isSecureChat && DEV_MODE && inspectorOpen && <EncryptionPanel me={secure.me} peer={activePeer} log={secure.log} status={secure.status} problem={secure.problem} />}
 
               <section className="messages" aria-live="polite">
-                <div className="notice">
-                  <Lock size={13} />
-                  <span>
-                    {isSecureChat
-                      ? activePeer
-                        ? 'End-to-end encrypted with ECDH P-256 + AES-GCM. Only you and your contact hold the keys; the server only sees ciphertext.'
-                        : 'Encrypted chats appear here when the server knows other people. Open ChitChat in another browser (or a private window).'
-                      : 'Demo chat. Messages are stored only on this device and are not encrypted.'}
-                  </span>
-                </div>
+                {isSecureChat && (
+                  <div className="notice">
+                    <Lock size={13} />
+                    <span>End-to-end encrypted</span>
+                  </div>
+                )}
 
                 {renderMessages()}
 
@@ -840,9 +853,10 @@ export default function App() {
         </main>
       </div>
 
+      {securityOpen && activePeer && <SecurityModal me={secure.me} peer={activePeer} onClose={() => setSecurityOpen(false)} />}
       {newChatOpen && <NewChatModal onCreate={handleCreateChat} onClose={() => setNewChatOpen(false)} />}
-      {profileOpen && (
-        <ProfileModal profile={profile} onSave={setProfile} onClose={() => setProfileOpen(false)} />
+      {((unnamed && !showSplash) || profileOpen) && (
+        <ProfileModal profile={profile} onSave={setProfile} onClose={() => setProfileOpen(false)} firstTime={unnamed} />
       )}
     </>
   );

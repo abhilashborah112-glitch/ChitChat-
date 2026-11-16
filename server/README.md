@@ -74,6 +74,11 @@ page. To point it elsewhere, set `VITE_SERVER_URL` when starting the client, or
 save an address in the browser: `localStorage.setItem('chitchat_v2_server_url', 'http://host:3001')`.
 The server only accepts pages listed in `CLIENT_ORIGIN`.
 
+Normal users only see "end-to-end encrypted" and a **Verify security code** option
+(chat menu ⋮), which shows the two public-key fingerprints. The technical panel
+(keys and raw ciphertext, handy for demos) is hidden unless you open the app with
+`http://localhost:5173/?dev=1`. A private key is never shown anywhere.
+
 Every person the server knows appears as a locked chat. The browser keeps its
 identity in `localStorage`, so closing the browser and coming back keeps the same
 id and key. To try two people on one computer use two different browsers, or a
