@@ -712,6 +712,13 @@ export default function App() {
               {isSecureChat && DEV_MODE && inspectorOpen && <EncryptionPanel me={secure.me} peer={activePeer} log={secure.log} status={secure.status} problem={secure.problem} />}
 
               <section className="messages" aria-live="polite">
+                {isSecureChat && (
+                  <div className="notice">
+                    <Lock size={13} />
+                    <span>End-to-end encrypted</span>
+                  </div>
+                )}
+
                 {renderMessages()}
 
                 {chatQuery.trim() && visibleMessages.length === 0 && (
