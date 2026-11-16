@@ -106,7 +106,7 @@ export function useSecureChannel({ name, onMessage, onAck }) {
   const announce = useCallback(() => {
     const identity = identityRef.current;
     const socket = socketRef.current;
-    if (!identity || !socket?.connected) return;
+    if (!identity || !socket?.connected || !nameRef.current) return; // wait until the person has chosen a name
     socket.emit(
       PACKET_EVENT,
       { type: 'hello', from: identity.id, name: nameRef.current, publicKey: identity.publicJwk },

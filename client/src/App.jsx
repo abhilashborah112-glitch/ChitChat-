@@ -12,8 +12,8 @@ import {
   Paperclip,
   Search,
   SendHorizontal,
-  Settings,
   ShieldCheck,
+  UserPen,
   Smile,
   SquarePen,
   Sun,
@@ -53,10 +53,12 @@ const seedNow = Date.now();
 const SECURE_ID = 'secure'; // placeholder chat shown until the server tells us about other people
 // Developer view of the encryption (keys + ciphertext). Off for normal users; open the app with ?dev=1 to show it.
 const DEV_MODE = new URLSearchParams(window.location.search).has('dev');
+const isUnnamed = (profile) => !profile.name?.trim() || profile.name.trim() === 'You';
 const securePeerChatId = (peerId) => `secure:${peerId}`;
 
+// No name yet: the first-time welcome screen asks for one (an old saved "You" counts as no name).
 const DEFAULT_PROFILE = {
-  name: 'You',
+  name: '',
   about: "Hey there! I'm using ChitChat",
   avatarImage: null,
 };
@@ -124,6 +126,7 @@ export default function App() {
   const [chatQuery, setChatQuery] = useState('');
   const [newChatOpen, setNewChatOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
+  const unnamed = isUnnamed(profile);
 
   const activeChatRef = useRef(activeChatId);
   const timers = useRef([]);
@@ -210,7 +213,7 @@ export default function App() {
 
   // Real end-to-end encrypted chats through the relay server (see useSecureChannel.js).
   const secure = useSecureChannel({
-    name: profile.name,
+    name: unnamed ? '' : profile.name.trim(), // nobody is announced to others until they have a name
     onMessage: (peerId, text, msgId, meta) => {
       updateSecure(peerId, (list) => [...list, { id: msgId, sender: 'other', kind: 'text', text, ts: meta?.sentAt || Date.now() }]);
       if (activeChatRef.current !== securePeerChatId(peerId)) {
@@ -505,7 +508,7 @@ export default function App() {
         <aside className="sidebar">
           <header className="sidebar-header">
             <button className="me-btn" onClick={() => setProfileOpen(true)} aria-label="Edit your profile">
-              <Avatar name={profile.name} image={profile.avatarImage} size={44} online />
+              <Avatar name={profile.name || 'Me'} image={profile.avatarImage} size={44} online />
             </button>
             <div className="brand">
               <span className="brand-name">
@@ -525,8 +528,8 @@ export default function App() {
               <button className="icon-btn" onClick={() => setNewChatOpen(true)} aria-label="New chat" title="New chat">
                 <SquarePen size={19} />
               </button>
-              <button className="icon-btn" onClick={() => setProfileOpen(true)} aria-label="Profile settings" title="Profile">
-                <Settings size={19} />
+              <button className="icon-btn" onClick={() => setProfileOpen(true)} aria-label="Edit profile" title="Edit profile">
+                <UserPen size={19} />
               </button>
             </div>
           </header>
@@ -709,17 +712,6 @@ export default function App() {
               {isSecureChat && DEV_MODE && inspectorOpen && <EncryptionPanel me={secure.me} peer={activePeer} log={secure.log} status={secure.status} problem={secure.problem} />}
 
               <section className="messages" aria-live="polite">
-                <div className="notice">
-                  <Lock size={13} />
-                  <span>
-                    {isSecureChat
-                      ? activePeer
-                        ? `Messages in this chat are end-to-end encrypted. Only you and ${activePeer.name} can read them.`
-                        : 'Your encrypted chats appear here as soon as other people join ChitChat.'
-                      : 'Demo chat. Messages are stored only on this device and are not encrypted.'}
-                  </span>
-                </div>
-
                 {renderMessages()}
 
                 {chatQuery.trim() && visibleMessages.length === 0 && (
@@ -856,8 +848,8 @@ export default function App() {
 
       {securityOpen && activePeer && <SecurityModal me={secure.me} peer={activePeer} onClose={() => setSecurityOpen(false)} />}
       {newChatOpen && <NewChatModal onCreate={handleCreateChat} onClose={() => setNewChatOpen(false)} />}
-      {profileOpen && (
-        <ProfileModal profile={profile} onSave={setProfile} onClose={() => setProfileOpen(false)} />
+      {((unnamed && !showSplash) || profileOpen) && (
+        <ProfileModal profile={profile} onSave={setProfile} onClose={() => setProfileOpen(false)} firstTime={unnamed} />
       )}
     </>
   );
